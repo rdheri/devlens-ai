@@ -35,6 +35,27 @@ export interface GitHubRepo {
   license: { spdx_id: string; name: string } | null;
 }
 
+export interface GitHubEvent {
+  type: string;
+  created_at: string;
+  repo: { name: string };
+}
+
+export interface ActivityDay {
+  date: string;
+  count: number;
+  level: 0 | 1 | 2 | 3 | 4;
+}
+
+export interface ActivityData {
+  heatmap: ActivityDay[];
+  totalEvents: number;
+  streak: number;
+  busiestDay: string;
+  weekdayDistribution: number[];
+  peakHour: number;
+}
+
 export interface LanguageStat {
   name: string;
   percentage: number;
@@ -73,6 +94,7 @@ export interface AnalysisResult {
   user: GitHubUser;
   languages: LanguageStat[];
   analysis: AIAnalysis;
+  activity: ActivityData;
   totalStars: number;
   totalForks: number;
   activeRepos: number;

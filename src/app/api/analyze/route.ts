@@ -1,13 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { fetchGitHubUser, fetchGitHubRepos, computeLanguageStats, computeRepoMetrics } from "@/lib/github";
+import { fetchGitHubUser, fetchGitHubRepos, fetchGitHubEvents, computeLanguageStats, computeRepoMetrics, computeActivityData } from "@/lib/github";
 import { analyzeProfile } from "@/lib/ai";
 import { AnalysisResult } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
-// Simple in-memory cache (persists within serverless function lifecycle)
 const cache = new Map<string, { data: AnalysisResult; timestamp: number }>();
-const CACHE_TTL = 1000 * 60 * 60; // 1 hour
+const CACHE_TTL = 1000 * 60 * 60;
 
 export async function GET(request: NextRequest) {
   const username = request.nextUrl.searchParams.get("username");
@@ -16,23 +15,21 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Username is required" }, { status: 400 });
   }
 
-  // Sanitize
   const cleanUsername = username.trim().replace(/[^a-zA-Z0-9-]/g, "");
   if (!cleanUsername || cleanUsername.length > 39) {
     return NextResponse.json({ error: "Invalid GitHub username" }, { status: 400 });
   }
 
-  // Check cache
   const cached = cache.get(cleanUsername.toLowerCase());
   if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
     return NextResponse.json(cached.data);
   }
 
   try {
-    // 1. Fetch GitHub data
-    const [user, repos] = await Promise.all([
+    const [user, repos, events] = await Promise.all([
       fetchGitHubUser(cleanUsername),
       fetchGitHubRepos(cleanUsername),
+      fetchGitHubEvents(cleanUsername),
     ]);
 
     if (repos.length === 0) {
@@ -42,25 +39,22 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // 2. Compute statistics
     const languages = computeLanguageStats(repos);
     const { totalStars, totalForks, activeRepos } = computeRepoMetrics(repos);
-
-    // 3. AI Analysis
+    const activity = computeActivityData(events);
     const analysis = await analyzeProfile(user, repos, languages);
 
-    // 4. Build result
     const result: AnalysisResult = {
       user,
       languages,
       analysis,
+      activity,
       totalStars,
       totalForks,
       activeRepos,
       analyzedAt: new Date().toISOString(),
     };
 
-    // Cache result
     cache.set(cleanUsername.toLowerCase(), { data: result, timestamp: Date.now() });
 
     return NextResponse.json(result);

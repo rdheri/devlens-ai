@@ -1,4 +1,4 @@
-import { GitHubUser, GitHubRepo, LanguageStat } from "./types";
+import { GitHubUser, GitHubRepo, GitHubEvent, LanguageStat, ActivityData, ActivityDay } from "./types";
 
 const LANGUAGE_COLORS: Record<string, string> = {
   JavaScript: "#f7df1e",
@@ -29,16 +29,16 @@ const LANGUAGE_COLORS: Record<string, string> = {
   "Jupyter Notebook": "#f37626",
 };
 
-const headers: Record<string, string> = {
-  Accept: "application/vnd.github.v3+json",
-};
-
-if (process.env.GITHUB_TOKEN) {
-  headers["Authorization"] = `Bearer ${process.env.GITHUB_TOKEN}`;
+function getHeaders(): Record<string, string> {
+  const h: Record<string, string> = { Accept: "application/vnd.github.v3+json" };
+  if (process.env.GITHUB_TOKEN) {
+    h["Authorization"] = `Bearer ${process.env.GITHUB_TOKEN}`;
+  }
+  return h;
 }
 
 async function ghFetch<T>(url: string): Promise<T> {
-  const res = await fetch(url, { headers, next: { revalidate: 3600 } });
+  const res = await fetch(url, { headers: getHeaders(), next: { revalidate: 3600 } });
   if (!res.ok) {
     if (res.status === 404) throw new Error("GitHub user not found");
     if (res.status === 403) throw new Error("GitHub API rate limit exceeded. Please try again later.");
@@ -56,7 +56,6 @@ export async function fetchGitHubRepos(username: string): Promise<GitHubRepo[]> 
   let page = 1;
   const perPage = 100;
 
-  // Fetch up to 3 pages (300 repos max)
   while (page <= 3) {
     const repos = await ghFetch<GitHubRepo[]>(
       `https://api.github.com/users/${username}/repos?per_page=${perPage}&page=${page}&sort=pushed&type=owner`
@@ -66,8 +65,96 @@ export async function fetchGitHubRepos(username: string): Promise<GitHubRepo[]> 
     page++;
   }
 
-  // Filter out forks and archived repos
   return allRepos.filter((r) => !r.fork && !r.archived);
+}
+
+export async function fetchGitHubEvents(username: string): Promise<GitHubEvent[]> {
+  const allEvents: GitHubEvent[] = [];
+  // GitHub Events API returns max 10 pages of 30 events (300 events, ~90 days)
+  for (let page = 1; page <= 10; page++) {
+    try {
+      const events = await ghFetch<GitHubEvent[]>(
+        `https://api.github.com/users/${username}/events/public?per_page=100&page=${page}`
+      );
+      allEvents.push(...events);
+      if (events.length < 100) break;
+    } catch {
+      break; // Events API can 404 for some users
+    }
+  }
+  return allEvents;
+}
+
+export function computeActivityData(events: GitHubEvent[]): ActivityData {
+  const dayMap: Record<string, number> = {};
+  const weekdayDist = [0, 0, 0, 0, 0, 0, 0];
+  const hourDist = new Array(24).fill(0);
+
+  // Fill last 90 days with 0s
+  const today = new Date();
+  for (let i = 0; i < 90; i++) {
+    const d = new Date(today);
+    d.setDate(d.getDate() - i);
+    const key = d.toISOString().split("T")[0];
+    dayMap[key] = 0;
+  }
+
+  for (const event of events) {
+    const date = new Date(event.created_at);
+    const key = date.toISOString().split("T")[0];
+    if (dayMap[key] !== undefined) {
+      dayMap[key]++;
+    }
+    weekdayDist[date.getUTCDay()]++;
+    hourDist[date.getUTCHours()]++;
+  }
+
+  // Compute intensity levels
+  const counts = Object.values(dayMap);
+  const maxCount = Math.max(...counts, 1);
+
+  const heatmap: ActivityDay[] = Object.entries(dayMap)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, count]) => ({
+      date,
+      count,
+      level: count === 0
+        ? 0
+        : count <= maxCount * 0.25
+          ? 1
+          : count <= maxCount * 0.5
+            ? 2
+            : count <= maxCount * 0.75
+              ? 3
+              : 4,
+    })) as ActivityDay[];
+
+  // Compute current streak
+  let streak = 0;
+  const sortedDays = [...heatmap].reverse();
+  // Start from yesterday (today might not be over)
+  for (let i = 1; i < sortedDays.length; i++) {
+    if (sortedDays[i].count > 0) streak++;
+    else break;
+  }
+  // If today has activity, add it
+  if (sortedDays[0]?.count > 0) streak++;
+
+  // Busiest day
+  const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  const busiestDayIdx = weekdayDist.indexOf(Math.max(...weekdayDist));
+
+  // Peak hour
+  const peakHour = hourDist.indexOf(Math.max(...hourDist));
+
+  return {
+    heatmap,
+    totalEvents: events.length,
+    streak,
+    busiestDay: dayNames[busiestDayIdx],
+    weekdayDistribution: weekdayDist,
+    peakHour,
+  };
 }
 
 export function computeLanguageStats(repos: GitHubRepo[]): LanguageStat[] {
