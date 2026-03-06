@@ -56,6 +56,17 @@ export interface ActivityData {
   peakHour: number;
 }
 
+export interface RepoCodeInsight {
+  repoName: string;
+  hasReadme: boolean;
+  readmeExcerpt: string;
+  topFiles: string[];
+  hasTests: boolean;
+  hasCI: boolean;
+  hasDocker: boolean;
+  hasLicense: boolean;
+}
+
 export interface LanguageStat {
   name: string;
   percentage: number;
@@ -88,6 +99,7 @@ export interface AIAnalysis {
   recommendations: string[];
   careerLevel: string;
   specialization: string;
+  codeInsights: string;
 }
 
 export interface AnalysisResult {
